@@ -36,6 +36,7 @@ const defaultState = (): RotationState => ({
     candidates: {},
 });
 
+const channelNames = new Map<string, string>();
 let state = defaultState();
 let saveQueue = Promise.resolve();
 let isRotating = false;
@@ -147,7 +148,7 @@ function isOwner(ownerId: number, userId?: number): boolean {
 }
 
 function channelLabel(channelId: string): string {
-    return channelId.startsWith("@") ? channelId : `کانال ${channelId}`;
+    return channelNames.get(channelId) ?? (channelId.startsWith("@") ? channelId : `کانال ${channelId}`);
 }
 
 function normalizeDigits(value: string): string {
@@ -351,6 +352,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     for (const channelId of state.channels) {
         try {
             const chat = await bot.telegram.getChat(channelId);
+            if (chat.type === "channel") channelNames.set(channelId, chat.title);
             if (chat.type === "channel" && chat.linked_chat_id !== undefined) {
                 state.discussionGroups[String(chat.linked_chat_id)] = channelId;
             }
@@ -539,6 +541,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
                     }
 
                     const resolved: string[] = [];
+                    const resolvedNames = new Map<string, string>();
                     const discussionGroups: Record<string, string> = {};
                     for (const name of names) {
                         try {
@@ -546,6 +549,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
                             if (chat.type !== "channel") throw new Error("Not a channel");
                             const channelId = String(chat.id);
                             resolved.push(channelId);
+                            resolvedNames.set(channelId, chat.title);
                             if (chat.linked_chat_id !== undefined) {
                                 discussionGroups[String(chat.linked_chat_id)] = channelId;
                             }
@@ -555,6 +559,8 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
                         }
                     }
                     state.channels = [...new Set(resolved)];
+                    channelNames.clear();
+                    for (const [channelId, title] of resolvedNames) channelNames.set(channelId, title);
                     state.discussionGroups = discussionGroups;
                 } else if (pending.type === "interval") {
                     const hours = Number(input.replace(",", "."));
