@@ -1,6 +1,6 @@
 import { config } from "dotenv";
 import { session, Telegraf } from "telegraf";
-import { BOT_OWNER_ID, BOT_TOKEN } from "./bot/config/env.config";
+import { BOT_ADMIN_IDS, BOT_TOKEN } from "./bot/config/env.config";
 import { registerRotationHandlers } from "./bot/handlers/rotation.js";
 import { prisma } from "./bot/config/database.config";
 
@@ -17,11 +17,11 @@ await prisma.$connect();
 
 bot.use(session());
 
-const ownerId = BOT_OWNER_ID();
-if (ownerId.isErr()) {
-    console.error("Set BOT_OWNER_ID to your Telegram numeric user ID to enable bot controls.");
+const adminIds = BOT_ADMIN_IDS();
+if (adminIds.isErr()) {
+    console.error("Set BOT_ADMIN_IDS to your Telegram numeric user IDs (comma separated) to enable bot controls.");
 } else {
-    await registerRotationHandlers(bot, ownerId.value);
+    await registerRotationHandlers(bot, adminIds.value);
 }
 
 let isPolling = false;

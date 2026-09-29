@@ -26,15 +26,12 @@ export function DATABASE_URL(): Result<string, "NOT_FOUND"> {
     }
 }
 
-export function BOT_OWNER_ID(): Result<number, "NOT_FOUND"> {
-    if (process.env.BOT_OWNER_ID) {
-        const ownerId = Number(process.env.BOT_OWNER_ID);
-        if (Number.isSafeInteger(ownerId) && ownerId > 0) {
-            return ok(ownerId);
-        } else {
-            return err("NOT_FOUND");
-        }
-    } else {
-        return err("NOT_FOUND");
+export function BOT_ADMIN_IDS(): Result<number[], "NOT_FOUND"> {
+    if (process.env.BOT_ADMIN_IDS) {
+        const ids = process.env.BOT_ADMIN_IDS.split(/[\s,]+/)
+            .map(id => Number(id.trim()))
+            .filter(id => Number.isSafeInteger(id) && id > 0);
+        return ids.length > 0 ? ok(ids) : err("NOT_FOUND");
     }
+    return err("NOT_FOUND");
 }

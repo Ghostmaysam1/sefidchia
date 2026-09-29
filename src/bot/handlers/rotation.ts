@@ -143,8 +143,8 @@ async function saveCandidate(channelId: string, candidate: Candidate): Promise<v
     });
 }
 
-function isOwner(ownerId: number, userId?: number): boolean {
-    return userId === ownerId;
+function isAdmin(adminIds: number[], userId?: number): boolean {
+    return userId !== undefined && adminIds.includes(userId);
 }
 
 function channelLabel(channelId: string): string {
@@ -180,9 +180,9 @@ function dashboardText(): string {
     const linkedGroupCount = new Set(Object.values(state.discussionGroups)).size;
     return [
         "مدیریت چرخهٔ ادمین",
-        `وضعیت: ${state.active ? "فعال" : "غیرفعال"}`,
+        "",
+        `وضعیت: ${state.active ? "فعال 🟢" : "غیرفعال 🔴"}`,
         `بازه: ${formatInterval(state.intervalMs)}`,
-        `کانال‌ها: ${state.channels.length ? state.channels.map(channelLabel).join("، ") : "ثبت نشده"}`,
         `گروه گفت‌وگوی متصل: ${linkedGroupCount} از ${state.channels.length}`,
         `انتخاب دستی بعدی: ${overrides.length ? overrides.join("، ") : "ندارد"}`,
         `شرکت‌کننده‌های ثبت‌شده: ${candidateCount}`,
@@ -346,7 +346,7 @@ async function rotate(bot: Telegraf, now: number): Promise<void> {
     await saveState();
 }
 
-export async function registerRotationHandlers(bot: Telegraf, ownerId: number): Promise<void> {
+export async function registerRotationHandlers(bot: Telegraf, adminIds: number[]): Promise<void> {
     await loadState();
 
     for (const channelId of state.channels) {
@@ -363,13 +363,14 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     await saveState();
 
     bot.start(async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return;
-        pendingInputs.delete(ownerId);
+        const userId = ctx.from?.id;
+        if (!isAdmin(adminIds, userId)) return;
+        if (userId) pendingInputs.delete(userId);
         await ctx.reply(dashboardText(), dashboardKeyboard());
     });
 
     bot.action("dashboard", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         await ctx.answerCbQuery();
         try {
             await ctx.editMessageText(dashboardText(), dashboardKeyboard());
@@ -379,7 +380,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action("rotation_toggle", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         if (!state.active && !state.channels.length) {
             await ctx.answerCbQuery("اول کانال‌ها را ثبت کنید.", { show_alert: true });
             return;
@@ -398,7 +399,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action("channels_menu", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         await ctx.answerCbQuery();
         const channels = state.channels.length ? state.channels.map(channelLabel).join("\n") : "هنوز کانالی ثبت نشده است.";
         await ctx.editMessageText(
@@ -411,8 +412,9 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action("channels_set", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
-        pendingInputs.set(ownerId, { type: "channels" });
+        const userId = ctx.from?.id;
+        if (!isAdmin(adminIds, userId)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (userId) pendingInputs.set(userId, { type: "channels" });
         await ctx.answerCbQuery();
         await ctx.editMessageText(
             "آیدی عمومی کانال‌ها را با فاصله یا ویرگول بفرستید؛ مثلاً @channel1 @channel2",
@@ -421,7 +423,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action("interval_menu", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         await ctx.answerCbQuery();
         await ctx.editMessageText(
             `بازهٔ فعلی: ${formatInterval(state.intervalMs)}\nیک بازه انتخاب کنید:`,
@@ -439,7 +441,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action(/^interval_test:(10|20)$/, async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         const seconds = Number(ctx.match[1]);
         state.intervalMs = seconds * 1000;
         if (state.active) {
@@ -452,7 +454,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action(/^interval_set:(\d+(?:\.\d+)?)$/, async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         const hours = Number(ctx.match[1]);
         state.intervalMs = hours * 3_600_000;
         if (state.active) {
@@ -465,14 +467,15 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action("interval_custom", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
-        pendingInputs.set(ownerId, { type: "interval" });
+        const userId = ctx.from?.id;
+        if (!isAdmin(adminIds, userId)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (userId) pendingInputs.set(userId, { type: "interval" });
         await ctx.answerCbQuery();
         await ctx.editMessageText("مدت را به ساعت وارد کنید (مثلاً 1.5؛ حداکثر ۷۲۰ ساعت).", cancelInputKeyboard());
     });
 
     bot.action("force_menu", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         await ctx.answerCbQuery();
         if (!state.channels.length) {
             await ctx.editMessageText("ابتدا از بخش کانال‌ها، کانال موردنظر را ثبت کنید.", dashboardKeyboard());
@@ -482,16 +485,17 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action(/^force:(-?\d+)$/, async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        const userId = ctx.from?.id;
+        if (!isAdmin(adminIds, userId)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         const channelId = ctx.match[1];
         if (!state.channels.includes(channelId)) return ctx.answerCbQuery("این کانال ثبت نشده است.", { show_alert: true });
-        pendingInputs.set(ownerId, { type: "forced_user", channelId });
+        if (userId) pendingInputs.set(userId, { type: "forced_user", channelId });
         await ctx.answerCbQuery();
         await ctx.editMessageText(`آیدی عددی کاربر برای ${channelLabel(channelId)} را بفرستید.`, cancelInputKeyboard());
     });
 
     bot.action("clear_force_menu", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         await ctx.answerCbQuery();
         const channelsWithOverride = state.channels.filter((channelId) => state.forcedNext[channelId] !== undefined);
         if (!channelsWithOverride.length) {
@@ -510,7 +514,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action(/^clear_force:(-?\d+)$/, async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (!isAdmin(adminIds, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
         delete state.forcedNext[ctx.match[1]];
         await saveState();
         await ctx.answerCbQuery("انتخاب دستی پاک شد.");
@@ -518,8 +522,9 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
     });
 
     bot.action("cancel_input", async (ctx) => {
-        if (!isOwner(ownerId, ctx.from?.id)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
-        pendingInputs.delete(ownerId);
+        const userId = ctx.from?.id;
+        if (!isAdmin(adminIds, userId)) return ctx.answerCbQuery("دسترسی ندارید.", { show_alert: true });
+        if (userId) pendingInputs.delete(userId);
         await ctx.answerCbQuery("لغو شد.");
         await ctx.editMessageText(dashboardText(), dashboardKeyboard());
     });
@@ -528,8 +533,8 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
         const message = ctx.message;
         const userId = message.from?.id;
 
-        if (ctx.chat.type === "private" && isOwner(ownerId, userId) && "text" in message) {
-            const pending = pendingInputs.get(ownerId);
+        if (ctx.chat.type === "private" && isAdmin(adminIds, userId) && "text" in message) {
+            const pending = userId ? pendingInputs.get(userId) : undefined;
             if (pending) {
                 const input = normalizeDigits(message.text.trim());
 
@@ -582,7 +587,7 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
                     state.forcedNext[pending.channelId] = forcedUserId;
                 }
 
-                pendingInputs.delete(ownerId);
+                if (userId) pendingInputs.delete(userId);
                 await saveState();
                 await ctx.reply(dashboardText(), dashboardKeyboard());
                 return;
