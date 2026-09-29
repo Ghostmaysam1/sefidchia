@@ -1,0 +1,44 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+model RotationSettings {
+    // The application uses one settings row with id = 1.
+    id             Int       @id @default(1)
+    active         Boolean   @default(false)
+    intervalMs     BigInt    @default(7200000) @map("interval_ms")
+    cycleStartedAt DateTime? @map("cycle_started_at") @db.Timestamptz(3)
+    nextRotationAt DateTime? @map("next_rotation_at") @db.Timestamptz(3)
+    createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+    updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+    @@map("rotation_settings")
+}
+
+model Channel {
+    id                 String      @id @db.VarChar(128)
+    discussionGroupId  String?     @unique @map("discussion_group_id") @db.VarChar(128)
+    currentAdminUserId BigInt?     @map("current_admin_user_id")
+    forcedNextUserId   BigInt?     @map("forced_next_user_id")
+    candidates         Candidate[]
+    createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+    updatedAt          DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+    @@map("channels")
+}
+
+model Candidate {
+    channelId   String   @map("channel_id") @db.VarChar(128)
+    userId      BigInt   @map("user_id")
+    postDate    DateTime @map("post_date") @db.Timestamptz(3)
+    commentDate DateTime @map("comment_date") @db.Timestamptz(3)
+    channel     Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+    @@id([channelId, userId, postDate])
+    @@index([channelId, commentDate])
+    @@map("candidates")
+}

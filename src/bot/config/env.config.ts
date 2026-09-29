@@ -1,4 +1,6 @@
+import { config } from "dotenv";
 import { err, ok, Result } from "neverthrow";
+config();
 
 export function BOT_TOKEN(): Result<string, "NOT_FOUND"> {
     if (process.env.BOT_TOKEN) {
@@ -8,9 +10,17 @@ export function BOT_TOKEN(): Result<string, "NOT_FOUND"> {
     }
 }
 
-export function WEBHOOK_URL(): Result<string, "NOT_FOUND"> {
-    if (process.env.BWEBHOOK_URL) {
-        return ok(process.env.BWEBHOOK_URL);
+export function NODE_ENV(): Result<string, "NOT_FOUND"> {
+    if (process.env.NODE_ENV) {
+        return ok(process.env.NODE_ENV);
+    } else {
+        return err("NOT_FOUND");
+    }
+}
+
+export function DATABASE_URL(): Result<string, "NOT_FOUND"> {
+    if (process.env.DATABASE_URL) {
+        return ok(process.env.DATABASE_URL);
     } else {
         return err("NOT_FOUND");
     }

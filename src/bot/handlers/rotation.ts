@@ -1,6 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import { Markup, type Telegraf } from "telegraf";
+import { prisma } from "../config/database.config";
 
 interface Candidate {
     userId: number;
@@ -37,7 +36,6 @@ const defaultState = (): RotationState => ({
     candidates: {},
 });
 
-const statePath = resolve(process.env.ROTATION_STATE_PATH ?? "data/rotation-state.json");
 let state = defaultState();
 let saveQueue = Promise.resolve();
 let isRotating = false;
@@ -45,21 +43,103 @@ const pendingInputs = new Map<number, PendingInput>();
 
 async function saveState(): Promise<void> {
     saveQueue = saveQueue.catch(() => undefined).then(async () => {
-        await mkdir(dirname(statePath), { recursive: true });
-        await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+        await prisma.$transaction(async (transaction) => {
+            await transaction.rotationSettings.upsert({
+                where: { id: 1 },
+                create: {
+                    id: 1,
+                    active: state.active,
+                    intervalMs: BigInt(state.intervalMs),
+                    cycleStartedAt: state.cycleStartedAt === null ? null : new Date(state.cycleStartedAt),
+                    nextRotationAt: state.nextRotationAt === null ? null : new Date(state.nextRotationAt),
+                },
+                update: {
+                    active: state.active,
+                    intervalMs: BigInt(state.intervalMs),
+                    cycleStartedAt: state.cycleStartedAt === null ? null : new Date(state.cycleStartedAt),
+                    nextRotationAt: state.nextRotationAt === null ? null : new Date(state.nextRotationAt),
+                },
+            });
+
+            await transaction.channel.updateMany({ data: { discussionGroupId: null } });
+            for (const channelId of state.channels) {
+                const discussionGroupId = Object.entries(state.discussionGroups)
+                    .find(([, linkedChannelId]) => linkedChannelId === channelId)?.[0] ?? null;
+                const currentAdminUserId = state.currentAdmins[channelId];
+                const forcedNextUserId = state.forcedNext[channelId];
+                const channelData = {
+                    discussionGroupId,
+                    currentAdminUserId: currentAdminUserId === undefined ? null : BigInt(currentAdminUserId),
+                    forcedNextUserId: forcedNextUserId === undefined ? null : BigInt(forcedNextUserId),
+                };
+
+                await transaction.channel.upsert({
+                    where: { id: channelId },
+                    create: { id: channelId, ...channelData },
+                    update: channelData,
+                });
+            }
+
+            await transaction.channel.deleteMany({
+                where: state.channels.length ? { id: { notIn: state.channels } } : {},
+            });
+        });
     });
     await saveQueue;
 }
 
 async function loadState(): Promise<void> {
-    try {
-        const stored = JSON.parse(await readFile(statePath, "utf8")) as Partial<RotationState>;
-        state = { ...defaultState(), ...stored };
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-            console.error("Could not load rotation state:", error);
-        }
+    const settings = await prisma.rotationSettings.findUnique({ where: { id: 1 } });
+    if (settings) {
+        const channels = await prisma.channel.findMany({ include: { candidates: true } });
+        state = {
+            active: settings.active,
+            intervalMs: Number(settings.intervalMs),
+            cycleStartedAt: settings.cycleStartedAt?.getTime() ?? null,
+            nextRotationAt: settings.nextRotationAt?.getTime() ?? null,
+            channels: channels.map((channel) => channel.id),
+            discussionGroups: Object.fromEntries(
+                channels.flatMap((channel) => channel.discussionGroupId
+                    ? [[channel.discussionGroupId, channel.id]]
+                    : []),
+            ),
+            currentAdmins: Object.fromEntries(
+                channels.flatMap((channel) => channel.currentAdminUserId !== null
+                    ? [[channel.id, Number(channel.currentAdminUserId)]]
+                    : []),
+            ),
+            forcedNext: Object.fromEntries(
+                channels.flatMap((channel) => channel.forcedNextUserId !== null
+                    ? [[channel.id, Number(channel.forcedNextUserId)]]
+                    : []),
+            ),
+            candidates: Object.fromEntries(channels.map((channel) => [
+                channel.id,
+                channel.candidates.map((candidate) => ({
+                    userId: Number(candidate.userId),
+                    postDate: candidate.postDate.getTime(),
+                    commentDate: candidate.commentDate.getTime(),
+                })),
+            ])),
+        };
+        return;
     }
+
+    state = defaultState();
+    await saveState();
+}
+
+async function saveCandidate(channelId: string, candidate: Candidate): Promise<void> {
+    const key = {
+        channelId,
+        userId: BigInt(candidate.userId),
+        postDate: new Date(candidate.postDate),
+    };
+    await prisma.candidate.upsert({
+        where: { channelId_userId_postDate: key },
+        create: { ...key, commentDate: new Date(candidate.commentDate) },
+        update: { commentDate: new Date(candidate.commentDate) },
+    });
 }
 
 function isOwner(ownerId: number, userId?: number): boolean {
@@ -169,15 +249,13 @@ async function rotate(bot: Telegraf, now: number): Promise<void> {
             const uniqueCandidates = [...new Map(
                 candidates
                     .filter((candidate) => {
-                        const candidateDate = state.intervalMs < 60_000
-                            ? candidate.commentDate ?? candidate.postDate
-                            : candidate.postDate;
-                        return candidateDate >= cycleStart && candidateDate < now && !adminIds.has(candidate.userId);
+                        return candidate.postDate >= cycleStart && candidate.postDate < now &&
+                            (!adminIds.has(candidate.userId) || candidate.userId === previousId);
                     })
                     .map((candidate) => [candidate.userId, candidate]),
             ).values()];
             const forcedId = state.forcedNext[channelId];
-            const forcedAdminSelected = forcedId !== undefined && adminIds.has(forcedId);
+            const forcedAdminSelected = forcedId !== undefined && adminIds.has(forcedId) && forcedId !== previousId;
             const winnerId = forcedAdminSelected
                 ? uniqueCandidates.length
                     ? uniqueCandidates[Math.floor(Math.random() * uniqueCandidates.length)].userId
@@ -259,6 +337,9 @@ async function rotate(bot: Telegraf, now: number): Promise<void> {
         state.candidates[channelId] = [];
     }
 
+    if (state.channels.length) {
+        await prisma.candidate.deleteMany({ where: { channelId: { in: state.channels } } });
+    }
     state.cycleStartedAt = now;
     state.nextRotationAt = now + state.intervalMs;
     await saveState();
@@ -516,9 +597,10 @@ export async function registerRotationHandlers(bot: Telegraf, ownerId: number): 
         const list = state.candidates[channelId] ?? [];
         const postDate = repliedPost.date * 1000;
         if (!list.some((candidate) => candidate.userId === userId && candidate.postDate === postDate)) {
-            list.push({ userId, postDate, commentDate: Date.now() });
+            const candidate = { userId, postDate, commentDate: Date.now() };
+            list.push(candidate);
             state.candidates[channelId] = list;
-            await saveState();
+            await saveCandidate(channelId, candidate);
             console.info(`[rotation] Commenter recorded for channel ${channelId}; unique participants: ${new Set(list.map((candidate) => candidate.userId)).size}`);
         }
     });
